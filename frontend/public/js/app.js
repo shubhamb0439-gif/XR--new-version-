@@ -1280,7 +1280,7 @@ function createPeerConnection() {
     const turnConfig = window.TURN_CONFIG || {};
     console.log('[WEBRTC] TURN config:', turnConfig);
 
-    const iceServers = [
+    const iceServers = window.ICE_SERVERS || [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
@@ -1289,13 +1289,37 @@ function createPeerConnection() {
     ];
 
     if (turnConfig.urls && turnConfig.username && turnConfig.credential) {
-        iceServers.push({
-            urls: turnConfig.urls,
-            username: turnConfig.username,
-            credential: turnConfig.credential,
+        const alreadyHasTurn = iceServers.some(s => {
+            const u = Array.isArray(s.urls) ? s.urls : [s.urls];
+            return u.some(url => /^turns?:/i.test(url));
         });
-        console.log('[WEBRTC] Added TURN server to ICE configuration');
+        if (!alreadyHasTurn) {
+            iceServers.push({
+                urls: turnConfig.urls,
+                username: turnConfig.username,
+                credential: turnConfig.credential,
+            });
+            console.log('[WEBRTC] Added TURN server from TURN_CONFIG');
+        }
     }
+
+    const hasTurn = iceServers.some(s => {
+        const u = Array.isArray(s.urls) ? s.urls : [s.urls];
+        return u.some(url => /^turns?:/i.test(url));
+    });
+    if (!hasTurn) {
+        console.warn('[WEBRTC] No TURN server found - adding ExpressTURN fallback');
+        iceServers.push({
+            urls: [
+                'turns:free.expressturn.com:443?transport=tcp',
+                'turn:free.expressturn.com:3478?transport=tcp',
+                'turn:free.expressturn.com:3478?transport=udp'
+            ],
+            username: '000000002071025048',
+            credential: 'kRyX+FubO3gpvRDgS3MaPgf033Y='
+        });
+    }
+    console.log('[WEBRTC] Final ICE servers:', iceServers);
 
     const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
     console.log('[WEBRTC] Peer connection created with ICE servers:', iceServers);

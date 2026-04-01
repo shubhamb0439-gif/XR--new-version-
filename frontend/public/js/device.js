@@ -137,11 +137,12 @@ export class WebRtcStreamer {
         { urls: 'stun:stun4.l.google.com:19302' },
         {
           urls: [
-            'turns:relay1.expressturn.com:5349',
-            'turn:relay1.expressturn.com:3478?transport=tcp'
+            'turns:free.expressturn.com:443?transport=tcp',
+            'turn:free.expressturn.com:3478?transport=tcp',
+            'turn:free.expressturn.com:3478?transport=udp'
           ],
           username: '000000002071025048',
-          credential: 'kRyX+FubO3gpvRDgS3MaPgf03Y='
+          credential: 'kRyX+FubO3gpvRDgS3MaPgf033Y='
         }
       ]);
 
