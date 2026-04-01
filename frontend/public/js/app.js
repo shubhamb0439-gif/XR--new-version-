@@ -1315,8 +1315,8 @@ function createPeerConnection() {
                 'turn:free.expressturn.com:3478?transport=tcp',
                 'turn:free.expressturn.com:3478?transport=udp'
             ],
-            username: '000000002071025048',
-            credential: 'kRyX+FubO3gpvRDgS3MaPgf033Y='
+            username: '000000002090400393',
+            credential: '8wq3XPkGJrgbAdwZgHMPTKPqbRQ='
         });
     }
     console.log('[WEBRTC] Final ICE servers:', iceServers);
