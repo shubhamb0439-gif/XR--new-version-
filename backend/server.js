@@ -443,28 +443,37 @@ function injectTurnConfig(html) {
 
   const expand = (u) => {
     if (!u) return [];
-    // If full turn/turns URL provided, use as-is
     if (/^(stun|turns?):/i.test(u)) return [u];
-    // If only a host was given (e.g. "turn.example.com"), synthesize common variants.
     const host = String(u).replace(/:\d+$/, '');
     return [
-      `turns:${host}:443?transport=tcp`,   // <- critical for iOS/corporate/captive networks
+      `turns:${host}:443?transport=tcp`,
+      `turn:${host}:443?transport=tcp`,
       `turns:${host}:5349?transport=tcp`,
       `turn:${host}:3478?transport=tcp`,
       `turn:${host}:3478?transport=udp`
     ];
   };
 
-  // Flatten all provided items (comma/space separated env)
   const urls = raw.flatMap(expand);
+  const turnUser = process.env.TURN_USERNAME || '';
+  const turnCred = process.env.TURN_CREDENTIAL || '';
+
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ];
+  if (urls.length && turnUser && turnCred) {
+    iceServers.push({ urls, username: turnUser, credential: turnCred });
+  }
 
   const cfg = `
     <script>
       window.TURN_CONFIG = {
         urls: ${urls.length <= 1 ? JSON.stringify(urls[0] || '') : JSON.stringify(urls)},
-        username: ${JSON.stringify(process.env.TURN_USERNAME || '')},
-        credential: ${JSON.stringify(process.env.TURN_CREDENTIAL || '')}
+        username: ${JSON.stringify(turnUser)},
+        credential: ${JSON.stringify(turnCred)}
       };
+      window.__ICE_SERVERS__ = ${JSON.stringify(iceServers)};
     </script>`;
 
   return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${cfg}\n</body>`) : (html + cfg);

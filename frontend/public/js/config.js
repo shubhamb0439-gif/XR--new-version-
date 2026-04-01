@@ -45,15 +45,14 @@
   );
 
 
-  // Build TURN urls that cover iOS/corporate networks (must include TLS 443)
   const buildTurnUrls = (base) => {
     if (!base) return [];
-    if (Array.isArray(base)) return base;                     // already an array
-    if (/^turns?:/i.test(base)) return [base];                // already a turn/turns URL
-    // If user gave just a host (e.g., "turn.example.com"), synthesize common variants:
+    if (Array.isArray(base)) return base;
+    if (/^turns?:/i.test(base)) return [base];
     const host = String(base).replace(/^https?:\/\//, '').replace(/^\/\//, '');
     return [
-      `turns:${host}:443?transport=tcp`,   // <- critical for iOS/captive networks
+      `turns:${host}:443?transport=tcp`,
+      `turn:${host}:443?transport=tcp`,
       `turns:${host}:5349?transport=tcp`,
       `turn:${host}:3478?transport=tcp`,
       `turn:${host}:3478?transport=udp`

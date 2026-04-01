@@ -118,13 +118,14 @@ export class WebRtcStreamer {
     /** @type {Map<string, RTCPeerConnection>} */
     this._pcs = new Map();
 
-    // Streaming/quality state
     this._isStreaming = false;
     this._qualityTimer = null;
     this._qLastTs = 0;
     this._qLastBytes = 0;
     this._qLastPackets = 0;
     this._qLastPacketsLost = 0;
+    this._hasRelayCandidates = new Map();
+    this._iceRestartCount = new Map();
 
     // ICE: prefer injected config → ctor override → fallback to your current defaults
     this._iceServers = (iceServers
@@ -138,6 +139,8 @@ export class WebRtcStreamer {
         {
           urls: [
             'turns:free.expressturn.com:443?transport=tcp',
+            'turn:free.expressturn.com:443?transport=tcp',
+            'turns:free.expressturn.com:5349?transport=tcp',
             'turn:free.expressturn.com:3478?transport=tcp',
             'turn:free.expressturn.com:3478?transport=udp'
           ],
@@ -461,22 +464,19 @@ export class WebRtcStreamer {
     }
   }
 
-  _ensurePc(targetId) {
-    const key = String(targetId || '').trim().toUpperCase();
-
-    let pc = this._pcs.get(key);
-    if (pc) return pc;
-
-    pc = new RTCPeerConnection({ iceServers: this._iceServers /* unified plan is default */ });
-
-    // Logging parity (PeerConnectionObserver)
-    pc.onicegatheringstatechange = () =>
+  _wireUpPc(pc, key) {
+    pc.onicegatheringstatechange = () => {
       console.debug(`[${key}] iceGatheringState=${pc.iceGatheringState}`);
-    pc.oniceconnectionstatechange = () =>
+    };
+
+    pc.oniceconnectionstatechange = () => {
       console.debug(`[${key}] iceConnectionState=${pc.iceConnectionState}`);
+    };
+
     pc.onconnectionstatechange = () => {
       console.debug(`[${key}] connectionState=${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
+        this._iceRestartCount.set(key, 0);
         if (!this._qualityTimer) this._startQualitySampling(pc);
         this._requestKeyFrame(pc);
       } else if (pc.connectionState === 'failed') {
@@ -489,7 +489,18 @@ export class WebRtcStreamer {
 
     pc.onicecandidate = (e) => {
       const c = e.candidate;
-      if (!c) return;
+      if (!c) {
+        const hasRelay = this._hasRelayCandidates.get(key) || false;
+        console.log(`[${key}] ICE gathering complete. hasRelay=${hasRelay}`);
+        if (!hasRelay) {
+          console.warn(`[${key}] No relay (TURN) candidates gathered. TURN server may be unreachable or credentials invalid. Cross-network iOS streaming will fail.`);
+        }
+        return;
+      }
+      if (c.candidate && c.candidate.includes('typ relay')) {
+        this._hasRelayCandidates.set(key, true);
+        console.log(`[${key}] TURN relay candidate gathered OK`);
+      }
       this.signaling.sendIceCandidate(
         { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex },
         this.ANDROID_XR_ID,
@@ -519,17 +530,25 @@ export class WebRtcStreamer {
       } catch { }
     };
 
-
-    // Ensure the initial offer contains an m=audio section so first Unmute works without renegotiation.
     try {
       const hasAudio = typeof pc.getTransceivers === 'function'
         && pc.getTransceivers().some(t => t?.receiver?.track?.kind === 'audio');
-
       if (!hasAudio && typeof pc.addTransceiver === 'function') {
         pc.addTransceiver('audio', { direction: 'sendrecv' });
-
       }
     } catch { }
+  }
+
+  _ensurePc(targetId) {
+    const key = String(targetId || '').trim().toUpperCase();
+
+    let pc = this._pcs.get(key);
+    if (pc) return pc;
+
+    this._hasRelayCandidates.set(key, false);
+
+    pc = new RTCPeerConnection({ iceServers: this._iceServers });
+    this._wireUpPc(pc, key);
 
     this._pcs.set(key, pc);
     console.debug(`[${key}] RTCPeerConnection created with TURN/STUN config`);
@@ -672,8 +691,40 @@ export class WebRtcStreamer {
     const key = String(targetId || '').trim().toUpperCase();
     const pc = this._pcs.get(key);
     if (!pc || pc.connectionState === 'closed') return;
+
+    const count = (this._iceRestartCount.get(key) || 0) + 1;
+    this._iceRestartCount.set(key, count);
+
+    if (count > 3) {
+      console.warn(`[${key}] ICE restart limit reached (${count}), giving up`);
+      return;
+    }
+
+    const hadRelay = this._hasRelayCandidates.get(key) || false;
+
+    if (count >= 2 && !hadRelay) {
+      console.warn(`[${key}] ICE restart #${count} with no relay. Recreating PC with iceTransportPolicy=relay`);
+      try { pc.close(); } catch {}
+      this._pcs.delete(key);
+      this._hasRelayCandidates.set(key, false);
+
+      const relayPc = new RTCPeerConnection({
+        iceServers: this._iceServers,
+        iceTransportPolicy: 'relay'
+      });
+      this._wireUpPc(relayPc, key);
+      this._pcs.set(key, relayPc);
+
+      this._addLocalTracks(relayPc);
+      this._preferH264(relayPc);
+      const offer = await relayPc.createOffer({});
+      await relayPc.setLocalDescription(offer);
+      this.signaling.sendOffer({ type: 'offer', sdp: offer.sdp }, this.ANDROID_XR_ID, key);
+      return;
+    }
+
     try {
-      console.debug(`[${key}] Attempting ICE restart`);
+      console.debug(`[${key}] Attempting ICE restart #${count}`);
       this._preferH264(pc);
       const offer = await pc.createOffer({ iceRestart: true });
       await pc.setLocalDescription(offer);
