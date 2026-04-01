@@ -1333,22 +1333,22 @@ function createPeerConnection() {
 
 
 
-    // Start WebRTC quality sampling as soon as we get the first remote track
     pc.ontrack = (event) => {
         console.log('[WEBRTC] Received track:', event.track.kind);
 
+        const eventStream = event.streams && event.streams[0];
+
         if (!remoteStream) {
             console.log('[WEBRTC] Creating new remote stream');
-            remoteStream = new MediaStream();
+            remoteStream = eventStream || new MediaStream();
             videoElement.srcObject = remoteStream;
             videoElement.muted = true;
             setMirror(true);
-            // iOS autoplay/rendering requirements
             videoElement.playsInline = true;
             videoElement.autoplay = true;
             videoElement.setAttribute('playsinline', '');
             videoElement.setAttribute('autoplay', '');
-            // mirror for front-cam view
+            videoElement.setAttribute('webkit-playsinline', '');
         }
 
         if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
@@ -1356,9 +1356,24 @@ function createPeerConnection() {
             remoteStream.addTrack(event.track);
         }
 
+        event.track.onunmute = () => {
+            console.log('[WEBRTC] Track unmuted:', event.track.kind);
+            if (videoElement.srcObject !== remoteStream) {
+                videoElement.srcObject = remoteStream;
+            }
+            videoElement.play().catch((e) => {
+                if (e && e.name === 'AbortError') {
+                    console.debug('[WEBRTC] play() aborted (teardown race)');
+                } else {
+                    console.warn('[WEBRTC] Video play error on unmute:', e);
+                    showClickToPlayOverlay();
+                }
+            });
+        };
+
         videoElement.play().catch((e) => {
             if (e && e.name === 'AbortError') {
-                console.debug('[WEBRTC] play() aborted (teardown race) — safe to ignore');
+                console.debug('[WEBRTC] play() aborted (teardown race)');
             } else {
                 console.warn('[WEBRTC] Video play error:', e);
                 showClickToPlayOverlay();
@@ -1398,11 +1413,25 @@ function createPeerConnection() {
 
     pc.oniceconnectionstatechange = () => {
         console.log('[WEBRTC] ICE connection state changed:', pc.iceConnectionState);
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-            console.log('[WEBRTC] ICE connection failed or disconnected - stopping stream');
-            stopStream();
-
-
+        if (pc.iceConnectionState === 'failed') {
+            console.log('[WEBRTC] ICE connection failed - requesting ICE restart from peer');
+            if (currentRoom && socket?.connected) {
+                socket.emit('control', { command: 'request_offer' });
+            } else {
+                stopStream();
+            }
+        } else if (pc.iceConnectionState === 'disconnected') {
+            console.log('[WEBRTC] ICE disconnected - waiting briefly for recovery');
+            setTimeout(() => {
+                if (pc.iceConnectionState === 'disconnected') {
+                    console.log('[WEBRTC] ICE still disconnected after timeout - requesting restart');
+                    if (currentRoom && socket?.connected) {
+                        socket.emit('control', { command: 'request_offer' });
+                    } else {
+                        stopStream();
+                    }
+                }
+            }, 5000);
         }
     };
 
@@ -1543,16 +1572,15 @@ async function handleOffer(offer) {
         }
 
 
-        // Prefer H.264 when answering (iOS Safari camera sends H.264 best)
         try {
             const caps = RTCRtpReceiver.getCapabilities && RTCRtpReceiver.getCapabilities('video');
             if (caps && Array.isArray(caps.codecs)) {
                 const h264 = caps.codecs.filter(c => (c.mimeType || '').toLowerCase() === 'video/h264');
+                const rest = caps.codecs.filter(c => (c.mimeType || '').toLowerCase() !== 'video/h264');
                 if (h264.length && typeof peerConnection.getTransceivers === 'function') {
                     for (const t of peerConnection.getTransceivers()) {
-                        if (t.receiver && t.receiver.track && t.receiver.track.kind === 'video' &&
-                            typeof t.setCodecPreferences === 'function') {
-                            t.setCodecPreferences(h264);
+                        if (t.receiver?.track?.kind === 'video' && typeof t.setCodecPreferences === 'function') {
+                            t.setCodecPreferences([...h264, ...rest]);
                         }
                     }
                 }

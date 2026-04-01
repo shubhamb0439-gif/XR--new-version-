@@ -477,10 +477,12 @@ export class WebRtcStreamer {
     pc.onconnectionstatechange = () => {
       console.debug(`[${key}] connectionState=${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
-        // Start sampling once when the first connection is active
         if (!this._qualityTimer) this._startQualitySampling(pc);
         this._requestKeyFrame(pc);
-      } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+      } else if (pc.connectionState === 'failed') {
+        if (!this._anyPcConnected()) this._stopQualitySampling();
+        this._attemptIceRestart(key);
+      } else if (['disconnected', 'closed'].includes(pc.connectionState)) {
         if (!this._anyPcConnected()) this._stopQualitySampling();
       }
     };
@@ -579,6 +581,7 @@ export class WebRtcStreamer {
     if (!pc) return;
 
     try {
+      this._preferH264(pc);
       const offer = await pc.createOffer({});
       await pc.setLocalDescription(offer);
       this.signaling.sendOffer({ type: 'offer', sdp: offer.sdp }, this.ANDROID_XR_ID, key);
@@ -617,7 +620,22 @@ export class WebRtcStreamer {
     } catch { return null; }
   }
 
-  // Request an immediate keyframe from the encoder (no renegotiation)
+  _preferH264(pc) {
+    try {
+      if (typeof pc.getTransceivers !== 'function') return;
+      const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
+      if (!caps || !Array.isArray(caps.codecs)) return;
+      const h264 = caps.codecs.filter(c => (c.mimeType || '').toLowerCase() === 'video/h264');
+      const rest = caps.codecs.filter(c => (c.mimeType || '').toLowerCase() !== 'video/h264');
+      if (!h264.length) return;
+      for (const t of pc.getTransceivers()) {
+        if (t.sender?.track?.kind === 'video' && typeof t.setCodecPreferences === 'function') {
+          t.setCodecPreferences([...h264, ...rest]);
+        }
+      }
+    } catch { }
+  }
+
   _requestKeyFrame(pc) {
     try {
       const s = pc.getSenders().find(x => x.track && x.track.kind === 'video');
@@ -649,6 +667,21 @@ export class WebRtcStreamer {
     return track;
   }
 
+
+  async _attemptIceRestart(targetId) {
+    const key = String(targetId || '').trim().toUpperCase();
+    const pc = this._pcs.get(key);
+    if (!pc || pc.connectionState === 'closed') return;
+    try {
+      console.debug(`[${key}] Attempting ICE restart`);
+      this._preferH264(pc);
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      this.signaling.sendOffer({ type: 'offer', sdp: offer.sdp }, this.ANDROID_XR_ID, key);
+    } catch (e) {
+      console.warn(`[${key}] ICE restart failed`, e);
+    }
+  }
 
   _anyPcConnected() {
     for (const pc of this._pcs.values()) if (pc.connectionState === 'connected') return true;
