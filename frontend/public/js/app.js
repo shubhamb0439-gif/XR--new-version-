@@ -159,8 +159,6 @@ let duplicateLock = false; // 🔒 prevents reconnect loops once server says ID 
 // --- perfect-negotiation helpers (for safe offer handling) ---
 let handlingOffer = false;          // prevent overlapping handleOffer() runs
 let lastRemoteOfferSdp = '';        // drop duplicate re-sent offers
-let hasRelayCandidatesLocal = false;
-let hasRelayCandidatesRemote = false;
 
 
 // --- Desktop network telemetry (renderer) ---
@@ -1314,8 +1312,6 @@ function createPeerConnection() {
         iceServers.push({
             urls: [
                 'turns:free.expressturn.com:443?transport=tcp',
-                'turn:free.expressturn.com:443?transport=tcp',
-                'turns:free.expressturn.com:5349?transport=tcp',
                 'turn:free.expressturn.com:3478?transport=tcp',
                 'turn:free.expressturn.com:3478?transport=udp'
             ],
@@ -1324,9 +1320,6 @@ function createPeerConnection() {
         });
     }
     console.log('[WEBRTC] Final ICE servers:', iceServers);
-
-    hasRelayCandidatesLocal = false;
-    hasRelayCandidatesRemote = false;
 
     const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
     console.log('[WEBRTC] Peer connection created with ICE servers:', iceServers);
@@ -1340,22 +1333,22 @@ function createPeerConnection() {
 
 
 
+    // Start WebRTC quality sampling as soon as we get the first remote track
     pc.ontrack = (event) => {
         console.log('[WEBRTC] Received track:', event.track.kind);
 
-        const eventStream = event.streams && event.streams[0];
-
         if (!remoteStream) {
             console.log('[WEBRTC] Creating new remote stream');
-            remoteStream = eventStream || new MediaStream();
+            remoteStream = new MediaStream();
             videoElement.srcObject = remoteStream;
             videoElement.muted = true;
             setMirror(true);
+            // iOS autoplay/rendering requirements
             videoElement.playsInline = true;
             videoElement.autoplay = true;
             videoElement.setAttribute('playsinline', '');
             videoElement.setAttribute('autoplay', '');
-            videoElement.setAttribute('webkit-playsinline', '');
+            // mirror for front-cam view
         }
 
         if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
@@ -1363,24 +1356,9 @@ function createPeerConnection() {
             remoteStream.addTrack(event.track);
         }
 
-        event.track.onunmute = () => {
-            console.log('[WEBRTC] Track unmuted:', event.track.kind);
-            if (videoElement.srcObject !== remoteStream) {
-                videoElement.srcObject = remoteStream;
-            }
-            videoElement.play().catch((e) => {
-                if (e && e.name === 'AbortError') {
-                    console.debug('[WEBRTC] play() aborted (teardown race)');
-                } else {
-                    console.warn('[WEBRTC] Video play error on unmute:', e);
-                    showClickToPlayOverlay();
-                }
-            });
-        };
-
         videoElement.play().catch((e) => {
             if (e && e.name === 'AbortError') {
-                console.debug('[WEBRTC] play() aborted (teardown race)');
+                console.debug('[WEBRTC] play() aborted (teardown race) — safe to ignore');
             } else {
                 console.warn('[WEBRTC] Video play error:', e);
                 showClickToPlayOverlay();
@@ -1392,18 +1370,16 @@ function createPeerConnection() {
 
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            const candStr = event.candidate.candidate || '';
-            if (candStr.includes('typ relay')) {
-                hasRelayCandidatesLocal = true;
-                console.log('[WEBRTC] Local TURN relay candidate gathered OK');
-            }
             console.log('[WEBRTC] Generated ICE candidate:', event.candidate);
 
+            // Option B: Do not emit ICE until we have a server-issued pair room.
+            // Otherwise ICE gets dropped server-side and the video stays black after reconnect.
             if (!currentRoom) {
                 console.warn('[WEBRTC] ICE generated before room_joined; queueing until paired');
                 (pendingLocalIce ||= []).push(event.candidate);
                 return;
             }
+
 
             socket?.emit('signal', {
                 type: 'ice-candidate',
@@ -1413,10 +1389,7 @@ function createPeerConnection() {
             });
 
         } else {
-            console.log(`[WEBRTC] ICE gathering complete. localRelay=${hasRelayCandidatesLocal}, remoteRelay=${hasRelayCandidatesRemote}`);
-            if (!hasRelayCandidatesLocal) {
-                console.warn('[WEBRTC] No local relay (TURN) candidates. TURN server may be unreachable or credentials invalid.');
-            }
+            console.log('[WEBRTC] ICE gathering complete');
         }
     };
 
@@ -1425,25 +1398,11 @@ function createPeerConnection() {
 
     pc.oniceconnectionstatechange = () => {
         console.log('[WEBRTC] ICE connection state changed:', pc.iceConnectionState);
-        if (pc.iceConnectionState === 'failed') {
-            console.log('[WEBRTC] ICE connection failed - requesting ICE restart from peer');
-            if (currentRoom && socket?.connected) {
-                socket.emit('control', { command: 'request_offer' });
-            } else {
-                stopStream();
-            }
-        } else if (pc.iceConnectionState === 'disconnected') {
-            console.log('[WEBRTC] ICE disconnected - waiting briefly for recovery');
-            setTimeout(() => {
-                if (pc.iceConnectionState === 'disconnected') {
-                    console.log('[WEBRTC] ICE still disconnected after timeout - requesting restart');
-                    if (currentRoom && socket?.connected) {
-                        socket.emit('control', { command: 'request_offer' });
-                    } else {
-                        stopStream();
-                    }
-                }
-            }, 5000);
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+            console.log('[WEBRTC] ICE connection failed or disconnected - stopping stream');
+            stopStream();
+
+
         }
     };
 
@@ -1584,15 +1543,16 @@ async function handleOffer(offer) {
         }
 
 
+        // Prefer H.264 when answering (iOS Safari camera sends H.264 best)
         try {
             const caps = RTCRtpReceiver.getCapabilities && RTCRtpReceiver.getCapabilities('video');
             if (caps && Array.isArray(caps.codecs)) {
                 const h264 = caps.codecs.filter(c => (c.mimeType || '').toLowerCase() === 'video/h264');
-                const rest = caps.codecs.filter(c => (c.mimeType || '').toLowerCase() !== 'video/h264');
                 if (h264.length && typeof peerConnection.getTransceivers === 'function') {
                     for (const t of peerConnection.getTransceivers()) {
-                        if (t.receiver?.track?.kind === 'video' && typeof t.setCodecPreferences === 'function') {
-                            t.setCodecPreferences([...h264, ...rest]);
+                        if (t.receiver && t.receiver.track && t.receiver.track.kind === 'video' &&
+                            typeof t.setCodecPreferences === 'function') {
+                            t.setCodecPreferences(h264);
                         }
                     }
                 }
@@ -1646,10 +1606,6 @@ async function handleOffer(offer) {
 
 async function handleRemoteIceCandidate(candidate) {
     console.log('[WEBRTC] Handling remote ICE candidate:', candidate);
-    if (candidate && candidate.candidate && candidate.candidate.includes('typ relay')) {
-        hasRelayCandidatesRemote = true;
-        console.log('[WEBRTC] Remote peer sent TURN relay candidate');
-    }
     if (peerConnection && peerConnection.remoteDescription && candidate && candidate.candidate) {
 
         try {
