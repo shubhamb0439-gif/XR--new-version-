@@ -126,24 +126,11 @@ export class WebRtcStreamer {
     this._qLastPackets = 0;
     this._qLastPacketsLost = 0;
 
-    // ICE: prefer injected config → ctor override → fallback to your current defaults
     this._iceServers = (iceServers
       || (typeof window !== 'undefined' && window.ICE_SERVERS)
       || [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        {
-          urls: [
-            'turns:free.expressturn.com:443?transport=tcp',
-            'turn:free.expressturn.com:3478?transport=tcp',
-            'turn:free.expressturn.com:3478?transport=udp'
-          ],
-          username: '000000002090400393',
-          credential: '8wq3XPkGJrgbAdwZgHMPTKPqbRQ='
-        }
       ]);
 
 
@@ -467,7 +454,12 @@ export class WebRtcStreamer {
     let pc = this._pcs.get(key);
     if (pc) return pc;
 
-    pc = new RTCPeerConnection({ iceServers: this._iceServers /* unified plan is default */ });
+    pc = new RTCPeerConnection({
+      iceServers: this._iceServers,
+      iceCandidatePoolSize: 1,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+    });
 
     // Logging parity (PeerConnectionObserver)
     pc.onicegatheringstatechange = () =>

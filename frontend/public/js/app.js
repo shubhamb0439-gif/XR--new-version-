@@ -1277,52 +1277,19 @@ function handleMessageHistory(data) {
 function createPeerConnection() {
     console.log('[WEBRTC] Creating new peer connection');
 
-    const turnConfig = window.TURN_CONFIG || {};
-    console.log('[WEBRTC] TURN config:', turnConfig);
-
     const iceServers = window.ICE_SERVERS || [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
     ];
+    console.log('[WEBRTC] ICE servers:', iceServers);
 
-    if (turnConfig.urls && turnConfig.username && turnConfig.credential) {
-        const alreadyHasTurn = iceServers.some(s => {
-            const u = Array.isArray(s.urls) ? s.urls : [s.urls];
-            return u.some(url => /^turns?:/i.test(url));
-        });
-        if (!alreadyHasTurn) {
-            iceServers.push({
-                urls: turnConfig.urls,
-                username: turnConfig.username,
-                credential: turnConfig.credential,
-            });
-            console.log('[WEBRTC] Added TURN server from TURN_CONFIG');
-        }
-    }
-
-    const hasTurn = iceServers.some(s => {
-        const u = Array.isArray(s.urls) ? s.urls : [s.urls];
-        return u.some(url => /^turns?:/i.test(url));
+    const pc = new RTCPeerConnection({
+        iceServers,
+        iceTransportPolicy: 'all',
+        iceCandidatePoolSize: 1,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
     });
-    if (!hasTurn) {
-        console.warn('[WEBRTC] No TURN server found - adding ExpressTURN fallback');
-        iceServers.push({
-            urls: [
-                'turns:free.expressturn.com:443?transport=tcp',
-                'turn:free.expressturn.com:3478?transport=tcp',
-                'turn:free.expressturn.com:3478?transport=udp'
-            ],
-            username: '000000002090400393',
-            credential: '8wq3XPkGJrgbAdwZgHMPTKPqbRQ='
-        });
-    }
-    console.log('[WEBRTC] Final ICE servers:', iceServers);
-
-    const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
-    console.log('[WEBRTC] Peer connection created with ICE servers:', iceServers);
 
     // 🔽 INSERT THIS FLAG (scoped to this call)
     let qualityStarted = false;
