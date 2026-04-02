@@ -1308,15 +1308,15 @@ function createPeerConnection() {
         return u.some(url => /^turns?:/i.test(url));
     });
     if (!hasTurn) {
-        console.warn('[WEBRTC] No TURN server found - adding ExpressTURN fallback');
+        console.warn('[WEBRTC] No TURN server found - adding OpenRelay fallback');
         iceServers.push({
             urls: [
-                'turns:free.expressturn.com:443?transport=tcp',
-                'turn:free.expressturn.com:3478?transport=tcp',
-                'turn:free.expressturn.com:3478?transport=udp'
+                'turn:openrelay.metered.ca:80',
+                'turn:openrelay.metered.ca:443',
+                'turns:openrelay.metered.ca:443'
             ],
-            username: '000000002090400393',
-            credential: '8wq3XPkGJrgbAdwZgHMPTKPqbRQ='
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
         });
     }
     console.log('[WEBRTC] Final ICE servers:', iceServers);

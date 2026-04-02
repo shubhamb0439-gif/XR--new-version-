@@ -137,12 +137,12 @@ export class WebRtcStreamer {
         { urls: 'stun:stun4.l.google.com:19302' },
         {
           urls: [
-            'turns:free.expressturn.com:443?transport=tcp',
-            'turn:free.expressturn.com:3478?transport=tcp',
-            'turn:free.expressturn.com:3478?transport=udp'
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turns:openrelay.metered.ca:443'
           ],
-          username: '000000002090400393',
-          credential: '8wq3XPkGJrgbAdwZgHMPTKPqbRQ='
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
         }
       ]);
 
